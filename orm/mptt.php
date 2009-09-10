@@ -7,7 +7,7 @@
  * @author     Brotkin Ivan (BIakaVeron) <BIakaVeron@gmail.com>
  * @copyright  Copyright (c) 2009 Brotkin Ivan
  *
- * @property Database                       $_db												$db
+ * @property Database                       $_db
  * @property Database_Query_Builder_Select  $_db_builder
  */
 
