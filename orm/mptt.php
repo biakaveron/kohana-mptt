@@ -7,8 +7,8 @@
  * @author     Brotkin Ivan (BIakaVeron) <BIakaVeron@gmail.com>
  * @copyright  Copyright (c) 2009 Brotkin Ivan
  *
- * @property Database                       $_db
- * @property Database_Query_Builder_Select  $_db_builder
+ * @property Database												$db
+ * @property Database_Query_Builder_Select  $db_builder
  */
 
 abstract class ORM_MPTT extends ORM
@@ -18,6 +18,7 @@ abstract class ORM_MPTT extends ORM
 	protected $_level_column = 'lvl';
 	protected $_scope_column = 'scope';
 	protected $_parent_column = 'parent_id';
+	protected $_sorting;
 
 	public function __construct($id = NULL) {
 		if (!isset($this->_sorting)) {
@@ -83,7 +84,7 @@ abstract class ORM_MPTT extends ORM
 
 	public function insert_near($id, $before = FALSE) {
 		// inserts node as next/prev sibling
-		if ($this->loaded) throw new Kohana_Exception('Cannot insert the same node twice');
+		if ($this->loaded()) throw new Kohana_Exception('Cannot insert the same node twice');
 		if ($this->size() > 2) throw new Kohana_Exception('Cannot use a node with children');
 		if (!is_a($id, get_class($this))) {
 			$id = self::factory($this->_object_name, $id);
@@ -105,15 +106,26 @@ abstract class ORM_MPTT extends ORM
 		$this->unlock();
 	}
 
-	public function delete() {
-		// deletes current node with descendants
-		$this->lock();
-		DB::delete($this->_table_name)
-			->where($this->_left_column," >=",$this->left())
-			->where($this->_left_column," <= ",$this->right())
-			->execute($this->_db);
-		$this->clear_space($this->left(), $this->size());
-		$this->unlock();
+	public function delete($id = NULL) {
+		// deletes applied node with descendants
+                if ( ! is_null($id) )
+                {
+                    $target = self::factory($this->_object_name, $id);
+                }
+                else
+                {
+                    $target = $this;
+                }
+                if ( ! $target->loaded()) return FALSE;
+
+		$target->lock();
+		DB::delete($target->_table_name)
+			->where($target->_left_column," >=",$target->left())
+			->where($target->_left_column," <= ",$target->right())
+			->where($target->_scope_column, " = ", $target->scope())
+			->execute($target->_db);
+		$target->clear_space($target->left(), $target->size());
+		$target->unlock();
 	}
 
 	public function move_to($id, $first = FALSE) {
@@ -145,10 +157,10 @@ abstract class ORM_MPTT extends ORM
 		DB::update($this->_table_name)
 			->in($this->primary_key, $ids)
 			->set(array(
-				$this->_left_column => DB::expr($this->_left_column. " + ".$delta),
-				$this->_right_column => DB::expr($this->_right_column. " + ".$delta),
-				$this->_level_column => DB::expr($this->_level_column. " + ".$deltalevel),
-				$this->_scope_column => $id->scope(),
+					$this->_left_column => DB::expr($this->_left_column. " + ".$delta),
+					$this->_right_column => DB::expr($this->_right_column. " + ".$delta),
+					$this->_level_column => DB::expr($this->_level_column. " + ".$deltalevel),
+					$this->_scope_column => $id->scope(),
 			))
 			->execute($this->_db);
 		$this->{$this->_parent_column} = $id->primary_key_value;
@@ -183,11 +195,11 @@ abstract class ORM_MPTT extends ORM
 		DB::update($this->_table_name)
 			->in($this->primary_key, $ids)
 			->set(array(
-				$this->_left_column => DB::expr($this->_left_column. " + ".$delta),
-				$this->_right_column => DB::expr($this->_right_column. " + ".$delta),
-				$this->_level_column => DB::expr($this->_level_column. " + ".$deltalevel),
-				$this->_scope_column => $id->scope(),
-			))
+					$this->_left_column => DB::expr($this->_left_column. " + ".$delta),
+					$this->_right_column => DB::expr($this->_right_column. " + ".$delta),
+					$this->_level_column => DB::expr($this->_level_column. " + ".$deltalevel),
+					$this->_scope_column => $id->scope(),
+				))
 			->execute($this->_db);
 		DB::update($this->_table_name)
 			->set(array($this->_parent_column => $id->primary_key_value))
@@ -219,14 +231,29 @@ abstract class ORM_MPTT extends ORM
 		}
 	}
 
-	public function get_parents($with_self = FALSE) {
+	public function get_parents($with_self = FALSE, $columns = FALSE) {
 		$suffix = $with_self ? "= " : " ";
-		// returns all current node parents
+		if (is_array($columns)) {
+			// returns applied columns only
+			$query = DB::select();
+			foreach ($columns as $column)
+				$query->select($column);
+			return $query
+				->from($this->_table_name)
+				->where($this->_left_column," <".$suffix, $this->left())
+				->where($this->_right_column," >".$suffix, $this->right())
+				->where($this->_scope_column, "=", $this->scope())
+				->execute($this->_db);
+		}
+		else
+		{
+		// returns all current node parents as ORM objects
 		return self::factory($this->_object_name)
-			->where($this->_left_column," <",$suffix.$this->left())
-			->where($this->_right_column," >",$suffix.$this->right())
+			->where($this->_left_column," <".$suffix, $this->left())
+			->where($this->_right_column," >".$suffix, $this->right())
 			->where($this->_scope_column, "=", $this->scope())
 			->find_all();
+		}
 	}
 
 	public function get_parent() {
@@ -401,12 +428,13 @@ abstract class ORM_MPTT extends ORM
 
 	protected function lock() {
 		// lock table
-		$this->_db->query('lock','LOCK TABLE '.$this->_table_name.' WRITE');
+		//$this->_db->query('lock','LOCK TABLE '.$this->_table_name.' WRITE');
+		DB::query('lock', 'LOCK TABLE '.$this->_table_name.' WRITE')->execute($this->_db);
 	}
 
 	protected function unlock() {
 		// unlock tables
-		$this->_db->query('unlock','UNLOCK TABLES');
+		DB::query('unlock','UNLOCK TABLES')->execute($this->_db);
 	}
 
 	protected function scope_available($scope) {
@@ -419,9 +447,9 @@ abstract class ORM_MPTT extends ORM
 	protected function get_next_scope() {
 		// returns available value for scope
 		$scope = DB::select(DB::expr('IFNULL(MAX(`'.$this->_scope_column.'`), 0) as scope'))
-				->from($this->_table_name)
-				->execute($this->_db)
-				->current();
+					->from($this->_table_name)
+					->execute($this->_db)
+					->current();
 		if ($scope AND intval($scope['scope'])>0) return intval($scope['scope'])+1;
 		return 1;
 	}
